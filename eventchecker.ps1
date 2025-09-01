@@ -1,22 +1,13 @@
 # ----------------------------
 # Settings
 # ----------------------------
-
-# Option 1: Define computers manually
 $Computers = @("PC01","PC02","PC03")
-
-# Option 2: Or load from a text file (one hostname per line)
-# $Computers = Get-Content "C:\Temp\hosts.txt"
-
-# Time window (adjust as needed)
-$StartTime = (Get-Date).AddDays(-3)   # last 3 days
+$StartTime = (Get-Date).AddDays(-3)
 $EndTime   = Get-Date
 
-# Output files
 $DetailFile  = "C:\Temp\RebootDetails.csv"
 $SummaryFile = "C:\Temp\RebootSummary.csv"
 
-# Event ID to status mapping
 $EventMap = @{
     1074 = "Planned restart/shutdown initiated"
     1076 = "Restart/shutdown canceled"
@@ -32,16 +23,18 @@ $Details = foreach ($Computer in $Computers) {
     Write-Host "Checking $Computer ..." -ForegroundColor Cyan
 
     try {
+        $XPath = @"
+        *[System[
+            (EventID=1074 or EventID=1076 or EventID=6006 or EventID=6008) and
+            TimeCreated[@SystemTime >= '$($StartTime.ToUniversalTime().ToString("o"))' and
+                        @SystemTime <= '$($EndTime.ToUniversalTime().ToString("o"))']
+        ]]
+"@
+
         $Events = Invoke-Command -ComputerName $Computer -ScriptBlock {
-            param($StartTime, $EndTime)
-
-            Get-WinEvent -LogName System -FilterHashtable @{
-                Id = 1074,1076,6006,6008
-                StartTime = $StartTime
-                EndTime = $EndTime
-            } | Select-Object TimeCreated, Id, Message
-
-        } -ArgumentList $StartTime, $EndTime -ErrorAction Stop
+            param($XPath)
+            Get-WinEvent -LogName System -FilterXPath $XPath
+        } -ArgumentList $XPath -ErrorAction Stop
 
         foreach ($Event in $Events) {
             [PSCustomObject]@{
@@ -64,14 +57,11 @@ $Details = foreach ($Computer in $Computers) {
     }
 }
 
-
 # ----------------------------
 # Build Summary
 # ----------------------------
-
 $Summary = $Details | Group-Object Computer | ForEach-Object {
     $lastEvent = $_.Group | Where-Object {$_.TimeCreated} | Sort-Object TimeCreated -Descending | Select-Object -First 1
-
     if ($null -eq $lastEvent) {
         [PSCustomObject]@{
             Computer    = $_.Name
@@ -79,8 +69,7 @@ $Summary = $Details | Group-Object Computer | ForEach-Object {
             Status      = "No reboot/shutdown logged"
             TimeCreated = ""
         }
-    }
-    else {
+    } else {
         [PSCustomObject]@{
             Computer    = $_.Name
             LastEvent   = $lastEvent.Status
@@ -93,14 +82,12 @@ $Summary = $Details | Group-Object Computer | ForEach-Object {
 # ----------------------------
 # Output
 # ----------------------------
-
 Write-Host "`n=== Detailed Events ===" -ForegroundColor Yellow
 $Details | Format-Table -AutoSize
 
 Write-Host "`n=== Summary Per Machine ===" -ForegroundColor Yellow
 $Summary | Format-Table -AutoSize
 
-# Save to CSVs
 $Details | Export-Csv -Path $DetailFile -NoTypeInformation -Encoding UTF8
 $Summary | Export-Csv -Path $SummaryFile -NoTypeInformation -Encoding UTF8
 
