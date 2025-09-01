@@ -18,33 +18,38 @@ $EventMap = @{
 # ----------------------------
 # Script
 # ----------------------------
-
 $Details = foreach ($Computer in $Computers) {
     Write-Host "Checking $Computer ..." -ForegroundColor Cyan
 
     try {
-        $XPath = @"
-        *[System[
-            (EventID=1074 or EventID=1076 or EventID=6006 or EventID=6008) and
-            TimeCreated[@SystemTime >= '$($StartTime.ToUniversalTime().ToString("o"))' and
-                        @SystemTime <= '$($EndTime.ToUniversalTime().ToString("o"))']
-        ]]
-"@
+        $XmlEvents = Invoke-Command -ComputerName $Computer -ScriptBlock {
+            param($StartTime, $EndTime)
+            # Convert to W3C format for wevtutil query
+            $StartStr = $StartTime.ToString("yyyy-MM-ddTHH:mm:ss")
+            $EndStr   = $EndTime.ToString("yyyy-MM-ddTHH:mm:ss")
+            # Query System log for reboot events
+            wevtutil qe System /q:"*[System[(EventID=1074 or EventID=1076 or EventID=6006 or EventID=6008) and TimeCreated[@SystemTime >= '$StartStr' and @SystemTime <= '$EndStr']]]" /f:xml
+        } -ArgumentList $StartTime, $EndTime -ErrorAction Stop
 
-        $Events = Invoke-Command -ComputerName $Computer -ScriptBlock {
-            param($XPath)
-            Get-WinEvent -LogName System -FilterXPath $XPath
-        } -ArgumentList $XPath -ErrorAction Stop
-
-        foreach ($Event in $Events) {
-            [PSCustomObject]@{
-                Computer    = $Computer
-                TimeCreated = $Event.TimeCreated
-                EventID     = $Event.Id
-                Status      = $EventMap[$Event.Id]
-                Message     = $Event.Message -replace "`r|`n"," "
+        # Parse XML and extract fields
+        $Events = foreach ($xml in $XmlEvents) {
+            [xml]$doc = $xml
+            $node = $doc.Event
+            if ($node) {
+                $eventId = [int]$node.System.EventID
+                $time    = [datetime]$node.System.TimeCreated.SystemTime
+                $message = $node.EventData.Data -join " "
+                [PSCustomObject]@{
+                    Computer    = $Computer
+                    TimeCreated = $time
+                    EventID     = $eventId
+                    Status      = $EventMap[$eventId]
+                    Message     = $message -replace "`r|`n"," "
+                }
             }
         }
+
+        $Events
     }
     catch {
         [PSCustomObject]@{
