@@ -29,13 +29,19 @@ $EventMap = @{
 # ----------------------------
 
 $Details = foreach ($Computer in $Computers) {
-    try {
-        Write-Host "Checking $Computer ..." -ForegroundColor Cyan
+    Write-Host "Checking $Computer ..." -ForegroundColor Cyan
 
-        $Events = Get-WinEvent -ComputerName $Computer -LogName System `
-            -FilterHashtable @{LogName='System'; Id=1074,1076,6006,6008; StartTime=$StartTime; EndTime=$EndTime} `
-            -ErrorAction Stop |
-            Select-Object TimeCreated, Id, Message
+    try {
+        $Events = Invoke-Command -ComputerName $Computer -ScriptBlock {
+            param($StartTime, $EndTime)
+
+            Get-WinEvent -LogName System -FilterHashtable @{
+                Id = 1074,1076,6006,6008
+                StartTime = $StartTime
+                EndTime = $EndTime
+            } | Select-Object TimeCreated, Id, Message
+
+        } -ArgumentList $StartTime, $EndTime -ErrorAction Stop
 
         foreach ($Event in $Events) {
             [PSCustomObject]@{
@@ -57,6 +63,7 @@ $Details = foreach ($Computer in $Computers) {
         }
     }
 }
+
 
 # ----------------------------
 # Build Summary
